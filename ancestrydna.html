@@ -52,6 +52,34 @@
 		tr:nth-child(even) {
 			background-color: #212529;
 		}
+
+		.table tr.header-row {
+			background-color: #495057;
+		}
+
+		.table.compact {
+			font-size: 18px;
+			line-height: 32px;
+		}
+
+		th {
+			padding: 6px 15px;
+			font-size: 16px;
+			line-height: 20px;
+		}
+
+		.table.compact td:not(:first-child) {
+			white-space: nowrap;
+		}
+
+		#resultTable {
+			max-width: 100%;
+			overflow-x: auto;
+		}
+
+		#outputLink, #estimateLink {
+			width: 100%;
+		}
 	</style>
 </head>
 <body>
@@ -65,6 +93,7 @@
 	      <p>Your ethnicity estimate is a separate calculation, and Ancestry only sends it as whole numbers. This page has never shown unrounded versions of those.</p>
 	      <p>What this page does: the chromosome painter splits your chromosomes into small pieces and labels each piece with a region. This page counts how many pieces got each label and turns those counts into percentages. The two are closely related, so the numbers are usually similar to your estimate, but they won't match exactly.</p>
 	      <p class="mb-0"><strong>Why is there an "Unassigned" row?</strong> Some pieces aren't labeled with any region, and the chromosome painter shows them in grey as "Unassigned". Your ethnicity estimate never shows Unassigned: it still counts that DNA toward some of your regions, but the chromosome painter data doesn't say which ones. So your other regions here will usually be a bit lower than in your estimate, and the more Unassigned DNA you have, the bigger that gap.</p>
+	      <p class="mt-3 mb-0"><strong>Estimate and Range columns</strong> (only if you did Step 6) come straight from your ethnicity estimate, so they match what Ancestry shows. The range is the lowest and highest percentage Ancestry gives for that region, which shows how uncertain the estimate is.</p>
 	    </div>
 	  </div>
 	</div>
@@ -118,6 +147,12 @@
 		  <p class="mb-2"><strong>Step 5:</strong> Paste the output here:</p>
           <textarea id="outputArea" class="form-control" placeholder="Paste the output that came from visiting the generated link." style="resize: none;"></textarea>
 		</div>
+		<div class="alert alert-info">
+		  <p class="mb-2"><strong>(Optional) Step 6:</strong> To compare with your ethnicity estimate and see its ranges, click this second link and paste its output here:</p>
+		  <a id="estimateLink" class="btn btn-success mb-2" href="" target="_blank" style="display: none;">Click Me - Estimate Link</a>
+          <textarea id="estimateArea" class="form-control" placeholder="Paste the output that came from visiting the estimate link." style="resize: none;"></textarea>
+		  <p class="mt-2" style="color: gray">Use the same year for both links. You can do this before or after Step 5.</p>
+		</div>
       </div>
     </div>
   </div>
@@ -132,6 +167,16 @@
 	const yearSelect = document.getElementById('yearSelect');
 	const outputLink = document.getElementById('outputLink');
 	const invalidBtn = document.getElementById('invalidBtn');
+	const estimateLink = document.getElementById('estimateLink');
+	const estimateArea = document.getElementById('estimateArea');
+	estimateArea.addEventListener('input', function (event) {
+		estimateArea.value = '';
+	});
+
+	// the two halves of the results. Either can be pasted first; the table is redrawn
+	// from whatever is available each time one arrives.
+	let painter = null;   // { result: {regionKey: windowCount}, total_length, version }
+	let estimate = null;  // { regions: {regionKey: regionObject}, version }
 
 	const infoBtn = document.getElementById('infoBtn');
 	infoBtn.addEventListener('click', function (event) {
@@ -704,9 +749,11 @@
 			outputLink.style.display = "inline-block";
 			outputLink.classList.remove("btn-danger");
 			outputLink.classList.add("btn-success");
+			estimateLink.style.display = "inline-block";
 			invalidBtn.style.display = "none";
 		} else {
 			outputLink.style.display = "none";
+			estimateLink.style.display = "none";
 			invalidBtn.style.display = "inline-block";
 			invalidBtn.classList.remove("btn-success");
 			invalidBtn.classList.add("btn-danger");
@@ -718,7 +765,102 @@
 		const year = yearSelect.value;
 		const generatedLink = "https://www.ancestry.com/dna/origins/inheritance/api/v1/ethnicities/" + code + "/chromosomes?version=" + year;
 		outputLink.href = generatedLink;
+		estimateLink.href = "https://www.ancestry.com/dna/origins/secure/tests/" + code + "/v2/ethnicity?version=" + year;
     }
+
+	function showResults() {
+		document.getElementById("instructionArea").style.display = "none";
+		document.getElementById("resultArea").style.display = "block";
+		document.getElementById("instructionToggle").style.display = "block";
+	}
+
+	function addCell(tr, tag, text) {
+		const cell = document.createElement(tag);
+		cell.appendChild(document.createTextNode(text));
+		tr.appendChild(cell);
+	}
+
+	function renderResults() {
+		const keys = new Set();
+		if (painter) Object.keys(painter.result).forEach(k => keys.add(k));
+		if (estimate) Object.keys(estimate.regions).forEach(k => keys.add(k));
+
+		const painterPct = k => (painter && painter.result[k]) ? 100*painter.result[k]/painter.total_length : null;
+		const estimatePct = k => (estimate && estimate.regions[k]) ? estimate.regions[k].percentage : null;
+
+		const rows = [...keys].sort((a, b) =>
+			((painterPct(b) || 0) - (painterPct(a) || 0)) || ((estimatePct(b) || 0) - (estimatePct(a) || 0)));
+
+		// rows go directly in the table (no thead/tbody), otherwise Bootstrap's table cell
+		// styles kick in and override the row colors.
+		let new_table = document.createElement('table');
+		new_table.className = estimate ? 'table compact' : 'table';
+
+		if (estimate) {
+			const tr = document.createElement('tr');
+			tr.className = 'header-row';
+			['Region', 'Chromosome painter', 'Estimate', 'Range'].forEach(h => addCell(tr, 'th', h));
+			new_table.appendChild(tr);
+		}
+
+		let lowConfidenceShown = false;
+		for (const key of rows) {
+			const tr = document.createElement('tr');
+			addCell(tr, 'td', ids[key] || key);
+			const p = painterPct(key);
+			addCell(tr, 'td', p === null ? '–' : p.toFixed(2) + ' %');
+			if (estimate) {
+				const r = estimate.regions[key];
+				addCell(tr, 'td', r ? r.percentage + ' %' : '–');
+				let range = r ? r.lowerConfidence + '–' + r.upperConfidence + ' %' : '–';
+				if (r && r.lowConfidenceAssignment) {
+					range += ' *';
+					lowConfidenceShown = true;
+				}
+				addCell(tr, 'td', range);
+			}
+			new_table.appendChild(tr);
+		}
+
+		let results_area = document.getElementById('resultTable');
+		results_area.innerHTML = '';
+		results_area.appendChild(new_table);
+
+		const notes = [];
+		if (lowConfidenceShown) {
+			notes.push('* Ancestry marks this region as a low-confidence assignment.');
+		}
+		if (painter && estimate && painter.version && estimate.version && painter.version != estimate.version) {
+			notes.push('Warning: the chromosome painter data is from ' + painter.version + ' but the estimate is from ' +
+				estimate.version + '. Pick the same year for both links.');
+		}
+		for (const text of notes) {
+			const note = document.createElement('p');
+			note.className = 'text-center text-muted mt-3';
+			note.textContent = text;
+			results_area.appendChild(note);
+		}
+
+		showResults();
+	}
+
+	estimateArea.addEventListener('paste', (event) => {
+		event.preventDefault();
+		const pasted_string = (event.clipboardData || window.clipboardData).getData('text');
+
+		try {
+			// only parse from the first { to the last }, in case extra text got copied along.
+			const data = JSON.parse(pasted_string.substring(pasted_string.indexOf('{'), pasted_string.lastIndexOf('}') + 1));
+			if (!Array.isArray(data.regions)) throw new Error('no regions');
+			const regions = {};
+			for (const r of data.regions) regions[r.key] = r;
+			estimate = { regions: regions, version: data.version };
+		} catch {
+			alert("Could not read the pasted estimate. Make sure you're copying the output of the estimate link (Step 6).");
+			return;
+		}
+		renderResults();
+	});
 
 	target.addEventListener('paste', (event) => {
 		event.preventDefault();
@@ -751,6 +893,10 @@
 			alert("Invalid input! Make sure you're copying and pasting the right thing!");
 			return;
 		}
+
+		// the year sits outside the chromosome data, e.g. ..."version":2026}}
+		const version_match = pasted_string.match(/version\\*"\s*:\s*"?(\d{4})/);
+		const painter_version = version_match ? parseInt(version_match[1]) : null;
 
 		// some people provided data showing no escape characters, so adding them
 		// if they don't exist to avoid errors.
@@ -788,39 +934,8 @@
 				}
 			}
 			
-			let sorted_result = Object.keys(result).map(function(key) {
-				return [key, result[key]];
-			});
-
-			sorted_result.sort(function(first, second) {
-				return second[1] - first[1];
-			});
-
-			let new_table = document.createElement('table');
-			new_table.className = 'table';
-
-			for (const i in sorted_result) {
-				let tr = document.createElement('tr');
-				let td = document.createElement('td');
-				
-				const pop_key = sorted_result[i][0];
-				td.appendChild(document.createTextNode(ids[pop_key] || pop_key));
-				tr.appendChild(td);
-
-				td = document.createElement('td');
-				td.appendChild(document.createTextNode((100*(sorted_result[i][1]/total_length)).toFixed(2) + ' %'));
-				tr.appendChild(td);
-				
-				new_table.appendChild(tr);
-			}
-
-			let results_area = document.getElementById('resultTable');
-			results_area.innerHTML = '';
-			results_area.appendChild(new_table);
-
-			document.getElementById("instructionArea").style.display = "none";
-			document.getElementById("resultArea").style.display = "block";
-			document.getElementById("instructionToggle").style.display = "block";
+			painter = { result: result, total_length: total_length, version: painter_version };
+			renderResults();
 		} catch {
 			alert("Could not read the pasted JSON. Make sure you're copying and pasting the right thing...");
 			return;
