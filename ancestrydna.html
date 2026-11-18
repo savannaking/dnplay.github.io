@@ -21,7 +21,7 @@
 			text-align: center;
 		}
 		
-		#outputLink, #invalidBtn, #infoBtn {
+		#outputLink, #invalidBtn {
 			width: 100%;
 		}
 		
@@ -83,34 +83,6 @@
 	</style>
 </head>
 <body>
-  <div id="resultArea" class="container mt-3" style="display: none;">
-    <h2 class="text-center">Results</h2>
-	<div class="row justify-content-center mt-3">
-	  <div class="col-md-8">
-	    <div id="howItWorks" class="alert alert-secondary">
-	      <p><strong>Where these numbers come from</strong></p>
-	      <p id="introPainterOnly">These are <strong>not</strong> your ethnicity estimate percentages. They come from Ancestry's <strong>chromosome painter</strong> (under DNA by parent), which colors in each of your chromosomes by region.</p>
-	      <p id="introWithEstimate" style="display: none;">The <strong>Estimate</strong> and <strong>Range</strong> columns are your ethnicity estimate, straight from Ancestry, so they match what Ancestry shows. The <strong>Chromosome painter</strong> column is <strong>not</strong> your estimate. It comes from Ancestry's chromosome painter (under DNA by parent), which colors in each of your chromosomes by region.</p>
-	      <p>Your ethnicity estimate is a separate calculation, and Ancestry only sends it as whole numbers. This page has never shown unrounded versions of those.</p>
-	      <p>How the chromosome painter numbers are worked out: the chromosome painter splits your chromosomes into small pieces and labels each piece with a region. This page counts how many pieces got each label and turns those counts into percentages. That's closely related to your estimate, so the numbers are usually similar, but they won't match exactly.</p>
-	      <p id="rangeExplainer" style="display: none;"><strong>What the range means:</strong> it's the lowest and highest percentage Ancestry gives for that region, which shows how uncertain the estimate is. A wide range like 0–39 % means Ancestry isn't very sure about that number.</p>
-	      <p class="mb-0"><strong>Why is there an "Unassigned" row?</strong> Some pieces aren't labeled with any region, and the chromosome painter shows them in grey as "Unassigned". Your ethnicity estimate never shows Unassigned: it still counts that DNA toward some of your regions, but the chromosome painter data doesn't say which ones. So your other regions here will usually be a bit lower than in your estimate, and the more Unassigned DNA you have, the bigger that gap.</p>
-	    </div>
-	  </div>
-	</div>
-	<div class="row justify-content-center mt-2">
-	  <div id="resultTable"></div>
-	</div>
-  </div>
-  <div id="instructionToggle" class="container mt-3" style="display: none;">
-	<div class="row justify-content-center mt-4">
-	  <div class="col-md-6">
-	    <div class="alert alert-info">
-	      <button id="infoBtn" class="btn btn-info mb-2">Click To View Instructions</button>
-	    </div>
-	  </div>
-	</div>
-  </div>
   <div id="instructionArea" class="container mt-3">
     <h2 class="text-center">Instructions</h2>
     <div class="row justify-content-center mt-4">
@@ -158,6 +130,26 @@
     </div>
   </div>
 
+  <div id="resultArea" class="container mt-3" style="display: none;">
+    <h2 class="text-center">Results</h2>
+	<div class="row justify-content-center mt-3">
+	  <div class="col-md-8">
+	    <div id="howItWorks" class="alert alert-secondary">
+	      <p><strong>Where these numbers come from</strong></p>
+	      <p id="introPainterOnly">These are <strong>not</strong> your ethnicity estimate percentages. They come from Ancestry's <strong>chromosome painter</strong> (under DNA by parent), which colors in each of your chromosomes by region.</p>
+	      <p id="introWithEstimate" style="display: none;">The <strong>Estimate</strong> and <strong>Range</strong> columns are your ethnicity estimate, straight from Ancestry, so they match what Ancestry shows. The <strong>Chromosome painter</strong> column is <strong>not</strong> your estimate. It comes from Ancestry's chromosome painter (under DNA by parent), which colors in each of your chromosomes by region.</p>
+	      <p>Your ethnicity estimate is a separate calculation, and Ancestry only sends it as whole numbers. This page has never shown unrounded versions of those.</p>
+	      <p>How the chromosome painter numbers are worked out: the chromosome painter splits your chromosomes into small pieces and labels each piece with a region. This page counts how many pieces got each label and turns those counts into percentages. That's closely related to your estimate, so the numbers are usually similar, but they won't match exactly.</p>
+	      <p id="rangeExplainer" style="display: none;"><strong>What the range means:</strong> it's the lowest and highest percentage Ancestry gives for that region, which shows how uncertain the estimate is. A wide range like 0–39 % means Ancestry isn't very sure about that number.</p>
+	      <p class="mb-0"><strong>Why is there an "Unassigned" row?</strong> Some pieces aren't labeled with any region, and the chromosome painter shows them in grey as "Unassigned". Your ethnicity estimate never shows Unassigned: it still counts that DNA toward some of your regions, but the chromosome painter data doesn't say which ones. So your other regions here will usually be a bit lower than in your estimate, and the more Unassigned DNA you have, the bigger that gap.</p>
+	    </div>
+	  </div>
+	</div>
+	<div class="row justify-content-center mt-2">
+	  <div id="resultTable"></div>
+	</div>
+  </div>
+
   <script>
 	const target = document.getElementById('outputArea');
 	target.addEventListener('input', function (event) {
@@ -179,13 +171,17 @@
 	let painter = null;   // { result: {regionKey: windowCount}, total_length, version }
 	let estimate = null;  // { regions: {regionKey: regionObject}, version }
 
-	const infoBtn = document.getElementById('infoBtn');
-	infoBtn.addEventListener('click', function (event) {
-		document.getElementById("instructionArea").style.display = "block";
-		document.getElementById("resultArea").style.display = "none";
-		document.getElementById("instructionToggle").style.display = "none";
-	});
-	
+	// which ID + year the pasted data belongs to. Changing either one throws away
+	// everything pasted so far, so results from two different tests can't get mixed.
+	let currentKey = null;
+
+	function clearResults() {
+		painter = null;
+		estimate = null;
+		document.getElementById('resultTable').innerHTML = '';
+		document.getElementById('resultArea').style.display = 'none';
+	}
+
 	const ids = {
 		"2021_001": "Senegal",
 		"2021_002": "Mali",
@@ -744,6 +740,11 @@
 
     function validateCode() {
 		const code = codeInput.value;
+		const key = code.trim().toUpperCase() + '|' + yearSelect.value;
+		if (key !== currentKey) {
+			currentKey = key;
+			clearResults();
+		}
 		const codeRegex = /^[a-zA-Z0-9]{8}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{4}-[a-zA-Z0-9]{12}$/;
 		if (codeRegex.test(code)) {
 			generateLink(code);
@@ -770,9 +771,9 @@
     }
 
 	function showResults() {
-		document.getElementById("instructionArea").style.display = "none";
-		document.getElementById("resultArea").style.display = "block";
-		document.getElementById("instructionToggle").style.display = "block";
+		const area = document.getElementById("resultArea");
+		area.style.display = "block";
+		area.scrollIntoView({ behavior: 'smooth', block: 'start' });
 	}
 
 	function addCell(tr, tag, text) {
@@ -903,6 +904,14 @@
 		// the year sits outside the chromosome data, e.g. ..."version":2026}}
 		const version_match = pasted_string.match(/version\\*"\s*:\s*"?(\d{4})/);
 		const painter_version = version_match ? parseInt(version_match[1]) : null;
+
+		// the output names the test it belongs to, e.g. ..."sampleId":"XXXXXXXX-..."
+		const sample_match = pasted_string.match(/sampleId\\*"\s*:\s*\\*"([0-9A-Za-z-]{36})/);
+		const entered_code = codeInput.value.trim().toUpperCase();
+		if (sample_match && entered_code && sample_match[1].toUpperCase() != entered_code) {
+			alert("This output is for a different test than the code in Step 3. Click the link in Step 4 again and paste its output.");
+			return;
+		}
 
 		// some people provided data showing no escape characters, so adding them
 		// if they don't exist to avoid errors.
