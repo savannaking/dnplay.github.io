@@ -183,6 +183,18 @@ function dnplayBookmarklet() {
 		return { percents: percents, data: data };
 	}
 
+	// Ancestry's versions are years (2026), with one oddity: 20211 is the 2021 regions
+	// re-run in April 2022 with the parent split added (and the first chromosome painter
+	// data). Sort it right after 2021, not as a number bigger than 2026, and call it "2021 v2".
+	function versionOrder(v) {
+		v = Number(v);
+		return v > 9999 ? Math.floor(v / 10) + (v % 10) / 10 : v;
+	}
+	function versionLabel(v) {
+		v = Number(v);
+		return v > 9999 ? Math.floor(v / 10) + ' v' + (v % 10 + 1) : String(v);
+	}
+
 	// everything for one year: painter percentages and segments, the estimate, and names.
 	// Each year is fetched once and reused by both views.
 	const yearCache = {};
@@ -224,10 +236,10 @@ function dnplayBookmarklet() {
 	}
 
 	async function load(testId, year) {
-		showStatus('Loading ' + year + '…');
+		showStatus('Loading ' + versionLabel(year) + '…');
 		const d = await fetchYear(testId, year);
 		if (!d.keys.size) {
-			showStatus('No ethnicity results found for ' + year + '.', true);
+			showStatus('No ethnicity results found for ' + versionLabel(year) + '.', true);
 			return;
 		}
 		render(year, d.painter, d.estimate, d.names, d.keys, d.painterData);
@@ -243,7 +255,7 @@ function dnplayBookmarklet() {
 	async function compare(testId, years) {
 		showStatus('Loading all years…');
 		const all = (await Promise.all(years.map(y => fetchYear(testId, y)))).filter(d => d.keys.size);
-		all.sort((a, b) => a.year - b.year);
+		all.sort((a, b) => versionOrder(a.year) - versionOrder(b.year));
 		renderCompare(all);
 	}
 
@@ -307,7 +319,7 @@ function dnplayBookmarklet() {
 		head.appendChild(el('th', null, 'Region'));
 		for (const y of years) {
 			// clicking a year shows that year's chromosome painter below the table.
-			const th = el('th', { class: 'year-pick' + (y === compareYear ? ' picked' : ''), title: 'Show the ' + y + ' chromosome painter below' }, String(y));
+			const th = el('th', { class: 'year-pick' + (y === compareYear ? ' picked' : ''), title: 'Show the ' + versionLabel(y) + ' chromosome painter below' }, versionLabel(y));
 			th.addEventListener('click', () => { compareYear = y; renderCompare(all); });
 			head.appendChild(th);
 		}
@@ -347,6 +359,10 @@ function dnplayBookmarklet() {
 		body.appendChild(el('p', { class: 'foot' },
 			'Ancestry changes its regions with each update, so some don\'t line up from year to year. Rows are matched by region code, or by name when the code changed. ' +
 			(compareMode === 'estimate' ? 'Hover over a number to see its range.' : 'Chromosome painter numbers include Unassigned, which only appears from 2026.')));
+		if (years.includes(20211)) {
+			body.appendChild(el('p', { class: 'foot' },
+				'2021 v2 is Ancestry\'s April 2022 re-run of the 2021 regions with the split by parent added. It\'s the first version with chromosome painter data.'));
+		}
 
 		drawCompareYear(all, allRows, table, latest);
 	}
@@ -359,7 +375,7 @@ function dnplayBookmarklet() {
 		picker.style.margin = '24px 0 0';
 		picker.appendChild(el('span', { class: 'picker-label' }, 'Chromosome painter for:'));
 		for (const d of all) {
-			const b = el('button', { type: 'button', class: d.year === compareYear ? 'active' : '' }, String(d.year));
+			const b = el('button', { type: 'button', class: d.year === compareYear ? 'active' : '' }, versionLabel(d.year));
 			b.addEventListener('click', () => { compareYear = d.year; renderCompare(all); });
 			picker.appendChild(b);
 		}
@@ -368,7 +384,7 @@ function dnplayBookmarklet() {
 		const d = all.find(x => x.year === compareYear);
 		const latestData = all.find(x => x.year === latest);
 		if (!d || !d.painterData) {
-			body.appendChild(el('p', { class: 'foot' }, 'No chromosome painter data for ' + compareYear + '.'));
+			body.appendChild(el('p', { class: 'foot' }, 'No chromosome painter data for ' + versionLabel(compareYear) + '.'));
 			return;
 		}
 
@@ -377,11 +393,11 @@ function dnplayBookmarklet() {
 		for (const row of allRows) if (row.keys[d.year]) rowFor[row.keys[d.year]] = row;
 		const showOutline = d.year !== latest && latestData && latestData.painterData && latestData.painter && latestData.painter.Unassigned;
 		const chromosomes = drawChromosomes(d.painterData, d.estimate, d.names, {
-			title: 'Chromosome painter, ' + d.year,
+			title: 'Chromosome painter, ' + versionLabel(d.year),
 			regionId: key => rowFor[key] ? rowFor[key].id : key,
 			colorFor: key => key === 'Unassigned' ? UNASSIGNED_COLOR : ((rowFor[key] && rowFor[key].color) || regionColor(key, d.estimate)),
 			outline: showOutline ? latestData.painterData : null,
-			outlineYear: latest,
+			outlineYear: versionLabel(latest),
 		});
 		body.appendChild(chromosomes);
 		// highlighted rows are kept while switching years (row ids stay the same).
@@ -390,7 +406,7 @@ function dnplayBookmarklet() {
 		if (showOutline) {
 			const under = paintedUnder(latestData.painterData, d.painterData);
 			const box = el('div', { class: 'note' });
-			box.appendChild(el('p', null, 'What ' + d.year + ' painted where ' + latest + ' says Unassigned (the striped parts):'));
+			box.appendChild(el('p', null, 'What ' + versionLabel(d.year) + ' painted where ' + versionLabel(latest) + ' says Unassigned (the striped parts):'));
 			const list = el('table', { class: 'compare under' });
 			for (const [key, share] of under) {
 				const tr = el('tr');
@@ -398,7 +414,7 @@ function dnplayBookmarklet() {
 				const swatch = el('span', { class: 'swatch' });
 				swatch.style.background = key ? (key === 'Unassigned' ? UNASSIGNED_COLOR : ((rowFor[key] && rowFor[key].color) || regionColor(key, d.estimate))) : '#dee2e6';
 				name.appendChild(swatch);
-				name.appendChild(document.createTextNode(key ? (d.names[key] || key) : 'Nothing (outside the ' + d.year + ' data)'));
+				name.appendChild(document.createTextNode(key ? (d.names[key] || key) : 'Nothing (outside the ' + versionLabel(d.year) + ' data)'));
 				tr.appendChild(name);
 				tr.appendChild(el('td', { class: 'num-cell' }, share.toFixed(1) + ' %'));
 				list.appendChild(tr);
@@ -691,8 +707,8 @@ function dnplayBookmarklet() {
 			footArea.innerHTML = '';
 			const foot = [];
 			if (lowConfidence) foot.push('* Ancestry marks this region as a low-confidence assignment.');
-			if (!hasPainter) foot.push('No chromosome painter data for ' + year + '.');
-			if (!hasEstimate) foot.push('No ethnicity estimate for ' + year + '.');
+			if (!hasPainter) foot.push('No chromosome painter data for ' + versionLabel(year) + '.');
+			if (!hasEstimate) foot.push('No ethnicity estimate for ' + versionLabel(year) + '.');
 			for (const text of foot) footArea.appendChild(el('p', { class: 'foot' }, text));
 
 			refreshSelection();
@@ -725,8 +741,8 @@ function dnplayBookmarklet() {
 				return;
 			}
 			const versions = (await getJson('/dna/origins/secure/tests/' + encodeURIComponent(testId) + '/ethnicity/versions')) || [];
-			const years = versions.length ? versions.slice().sort((a, b) => b - a) : [new Date().getFullYear()];
-			for (const y of years) yearSelect.appendChild(el('option', { value: y }, String(y)));
+			const years = versions.length ? versions.slice().sort((a, b) => versionOrder(b) - versionOrder(a)) : [new Date().getFullYear()];
+			for (const y of years) yearSelect.appendChild(el('option', { value: y }, versionLabel(y)));
 			yearSelect.addEventListener('change', () => load(testId, yearSelect.value).catch(fail));
 
 			const tabResults = root.querySelector('.tab-results');
