@@ -59,6 +59,20 @@ function dnplayBookmarklet() {
 	td:first-child { white-space: normal; }
 	.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; vertical-align: 0; }
 	.foot { text-align: center; color: #6c757d; font-size: 14px; margin-top: 12px; }
+	tr.region { cursor: pointer; }
+	tr.region.selected td { box-shadow: inset 0 0 0 9999px rgba(255,255,255,.18); }
+	h3 { font-size: 18px; margin: 28px 0 4px; }
+	.hint { color: #6c757d; font-size: 13px; margin: 0 0 12px; }
+	.chromosomes { display: grid; grid-template-columns: 28px 1fr; row-gap: 10px; column-gap: 8px; align-items: center; }
+	.num { text-align: right; font-weight: 700; font-size: 13px; color: #495057; }
+	.pair { display: flex; flex-direction: column; gap: 3px; }
+	.bar { position: relative; height: 12px; background: #979797; border-radius: 6px; overflow: hidden; }
+	.seg { position: absolute; top: 0; bottom: 0; transition: opacity .15s; }
+	.dim .bar { background: #e9ecef; }
+	.dim .seg:not(.on) { opacity: .12; }
+	.centromere { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; }
+	.legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: #495057; margin-top: 12px; }
+	.legend span::before { content: ""; display: inline-block; width: 12px; height: 12px; border-radius: 3px; background: #979797; margin-right: 6px; vertical-align: -1px; }
 </style>
 <div class="backdrop">
 	<div class="panel" role="dialog" aria-label="DNPlay results">
@@ -139,7 +153,7 @@ function dnplayBookmarklet() {
 		}
 		const percents = {};
 		for (const key in counts) percents[key] = 100 * counts[key] / total;
-		return percents;
+		return { percents: percents, data: data };
 	}
 
 	async function load(testId, year) {
@@ -150,7 +164,8 @@ function dnplayBookmarklet() {
 			getJson('/dna/origins/secure/tests/' + enc + '/v2/ethnicity?version=' + year),
 		]);
 
-		const painter = summarizePainter(painterJson);
+		const painterSummary = summarizePainter(painterJson);
+		const painter = painterSummary ? painterSummary.percents : null;
 		const estimate = {};
 		for (const r of (estimateJson && estimateJson.regions) || []) estimate[r.key] = r;
 
@@ -170,10 +185,69 @@ function dnplayBookmarklet() {
 			})) || {};
 		} catch (e) { /* fall back to showing the key */ }
 
-		render(year, painter, estimate, names, keys);
+		render(year, painter, estimate, names, keys, painterSummary ? painterSummary.data : null);
 	}
 
-	function render(year, painter, estimate, names, keys) {
+	// how Ancestry's own chromosome painter draws each chromosome: its length relative to
+	// chromosome 1 and where it splits into its two arms (the centromere), both in percent.
+	const CHROMOSOME_LENGTH = [100, 97.57, 79.45, 76.69, 72.58, 68.65, 63.85, 58.72, 56.66, 54.38, 54.16,
+		53.7, 46.21, 43.07, 41.14, 36.25, 32.58, 31.32, 23.72, 25.29, 19.31, 20.58];
+	const CENTROMERE = [49.362, 38.58, 46.462, 26.764, 26.48, 35.257, 37.423, 30.977, 34.606, 30.069, 39.364,
+		27.162, 15.195, 16.302, 18.043, 40.768, 29.267, 21.723, 44.279, 44.22, 26.57, 28.263];
+	const UNASSIGNED_COLOR = '#979797';
+
+	function regionColor(key, estimate) {
+		const r = estimate[key];
+		if (key === 'Unassigned') return UNASSIGNED_COLOR;
+		if (r && (r.darkColor || r.color)) return r.darkColor || r.color;
+		// a region with no estimate entry: give it a stable color of its own.
+		let hash = 0;
+		for (const ch of key) hash = (hash * 31 + ch.charCodeAt(0)) % 360;
+		return 'hsl(' + hash + ', 55%, 45%)';
+	}
+
+	// draw the chromosome painter: two bars per chromosome (parent 1 on top, parent 2
+	// below), each segment placed by its winPercs (start and end as a fraction of the
+	// chromosome). Anything not covered stays grey, the same as on Ancestry.
+	function drawChromosomes(data, estimate, names) {
+		const section = el('div');
+		section.appendChild(el('h3', null, 'Chromosome painter'));
+		section.appendChild(el('p', { class: 'hint' }, 'Parent 1 on top, Parent 2 below. Click a region in the table to highlight it.'));
+		const grid = el('div', { class: 'chromosomes' });
+		for (let c = 1; c <= 22; c++) {
+			grid.appendChild(el('div', { class: 'num' }, String(c)));
+			const pair = el('div', { class: 'pair' });
+			pair.style.width = CHROMOSOME_LENGTH[c - 1] + '%';
+			for (const parent of ['parent1', 'parent2']) {
+				const bar = el('div', { class: 'bar' });
+				for (const segment of (data[parent] || {})[c] || []) {
+					const start = Math.max(0, segment.winPercs[0]);
+					const end = Math.min(1, segment.winPercs[1]);
+					const seg = el('div', { class: 'seg' });
+					seg.dataset.region = segment.region;
+					seg.style.left = (100 * start) + '%';
+					seg.style.width = (100 * (end - start)) + '%';
+					seg.style.background = regionColor(segment.region, estimate);
+					const name = segment.region === 'Unassigned' ? 'Unassigned' : (names[segment.region] || segment.region);
+					seg.title = name + ' · chromosome ' + c + ', ' + (parent === 'parent1' ? 'parent 1' : 'parent 2') +
+						' · ' + Math.round(100 * start) + '–' + Math.round(100 * end) + '% along';
+					bar.appendChild(seg);
+				}
+				const centromere = el('div', { class: 'centromere' });
+				centromere.style.left = CENTROMERE[c - 1] + '%';
+				bar.appendChild(centromere);
+				pair.appendChild(bar);
+			}
+			grid.appendChild(pair);
+		}
+		section.appendChild(grid);
+		const legend = el('div', { class: 'legend' });
+		legend.appendChild(el('span', null, 'Grey: Unassigned, or not covered by the test'));
+		section.appendChild(legend);
+		return section;
+	}
+
+	function render(year, painter, estimate, names, keys, painterData) {
 		body.innerHTML = '';
 		const hasPainter = !!painter;
 		const hasEstimate = Object.keys(estimate).length > 0;
@@ -212,14 +286,13 @@ function dnplayBookmarklet() {
 		let lowConfidence = false;
 		for (const key of rows) {
 			const r = estimate[key];
-			const tr = el('tr');
+			const tr = el('tr', { class: 'region' });
+			tr.dataset.region = key;
 			const name = el('td');
 			// darkColor is the color Ancestry's chromosome painter uses for the region.
-			if (r && (r.darkColor || r.color)) {
-				const swatch = el('span', { class: 'swatch' });
-				swatch.style.background = r.darkColor || r.color;
-				name.appendChild(swatch);
-			}
+			const swatch = el('span', { class: 'swatch' });
+			swatch.style.background = regionColor(key, estimate);
+			name.appendChild(swatch);
 			name.appendChild(document.createTextNode(key === 'Unassigned' ? 'Unassigned' : (names[key] || key)));
 			tr.appendChild(name);
 			const p = value(painter, key);
@@ -242,6 +315,22 @@ function dnplayBookmarklet() {
 		if (!hasPainter) foot.push('No chromosome painter data for ' + year + '.');
 		if (!hasEstimate) foot.push('No ethnicity estimate for ' + year + '.');
 		for (const text of foot) body.appendChild(el('p', { class: 'foot' }, text));
+
+		if (painterData) {
+			const chromosomes = drawChromosomes(painterData, estimate, names);
+			body.appendChild(chromosomes);
+
+			// clicking a region row highlights its segments; clicking it again clears that.
+			let selected = null;
+			table.addEventListener('click', e => {
+				const row = e.target.closest('tr.region');
+				if (!row) return;
+				selected = selected === row.dataset.region ? null : row.dataset.region;
+				for (const tr of table.querySelectorAll('tr.region')) tr.classList.toggle('selected', tr.dataset.region === selected);
+				chromosomes.classList.toggle('dim', selected !== null);
+				for (const seg of chromosomes.querySelectorAll('.seg')) seg.classList.toggle('on', seg.dataset.region === selected);
+			});
+		}
 	}
 
 	// ---------- start ----------
