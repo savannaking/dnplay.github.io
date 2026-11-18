@@ -89,11 +89,12 @@
 	  <div class="col-md-8">
 	    <div id="howItWorks" class="alert alert-secondary">
 	      <p><strong>Where these numbers come from</strong></p>
-	      <p>These are <strong>not</strong> your ethnicity estimate percentages. They come from Ancestry's <strong>chromosome painter</strong> (under DNA by parent), which colors in each of your chromosomes by region.</p>
+	      <p id="introPainterOnly">These are <strong>not</strong> your ethnicity estimate percentages. They come from Ancestry's <strong>chromosome painter</strong> (under DNA by parent), which colors in each of your chromosomes by region.</p>
+	      <p id="introWithEstimate" style="display: none;">The <strong>Estimate</strong> and <strong>Range</strong> columns are your ethnicity estimate, straight from Ancestry, so they match what Ancestry shows. The <strong>Chromosome painter</strong> column is <strong>not</strong> your estimate. It comes from Ancestry's chromosome painter (under DNA by parent), which colors in each of your chromosomes by region.</p>
 	      <p>Your ethnicity estimate is a separate calculation, and Ancestry only sends it as whole numbers. This page has never shown unrounded versions of those.</p>
-	      <p>What this page does: the chromosome painter splits your chromosomes into small pieces and labels each piece with a region. This page counts how many pieces got each label and turns those counts into percentages. The two are closely related, so the numbers are usually similar to your estimate, but they won't match exactly.</p>
+	      <p>How the chromosome painter numbers are worked out: the chromosome painter splits your chromosomes into small pieces and labels each piece with a region. This page counts how many pieces got each label and turns those counts into percentages. That's closely related to your estimate, so the numbers are usually similar, but they won't match exactly.</p>
+	      <p id="rangeExplainer" style="display: none;"><strong>What the range means:</strong> it's the lowest and highest percentage Ancestry gives for that region, which shows how uncertain the estimate is. A wide range like 0–39 % means Ancestry isn't very sure about that number.</p>
 	      <p class="mb-0"><strong>Why is there an "Unassigned" row?</strong> Some pieces aren't labeled with any region, and the chromosome painter shows them in grey as "Unassigned". Your ethnicity estimate never shows Unassigned: it still counts that DNA toward some of your regions, but the chromosome painter data doesn't say which ones. So your other regions here will usually be a bit lower than in your estimate, and the more Unassigned DNA you have, the bigger that gap.</p>
-	      <p class="mt-3 mb-0"><strong>Estimate and Range columns</strong> (only if you did Step 6) come straight from your ethnicity estimate, so they match what Ancestry shows. The range is the lowest and highest percentage Ancestry gives for that region, which shows how uncertain the estimate is.</p>
 	    </div>
 	  </div>
 	</div>
@@ -802,6 +803,11 @@
 			['Region', 'Chromosome painter', 'Estimate', 'Range'].forEach(h => addCell(tr, 'th', h));
 			new_table.appendChild(tr);
 		}
+
+		// switch the explanation above the table between the painter-only and with-estimate versions.
+		document.getElementById('introPainterOnly').style.display = estimate ? 'none' : 'block';
+		document.getElementById('introWithEstimate').style.display = estimate ? 'block' : 'none';
+		document.getElementById('rangeExplainer').style.display = estimate ? 'block' : 'none';
 
 		let lowConfidenceShown = false;
 		for (const key of rows) {
