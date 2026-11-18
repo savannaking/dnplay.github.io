@@ -70,6 +70,15 @@ function dnplayBookmarklet() {
 	table.compare { font-size: 15px; line-height: 26px; }
 	.compare td, .compare th { padding: 0 10px; }
 	.compare th { padding-top: 6px; padding-bottom: 6px; }
+	th.year-pick { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+	th.year-pick.picked { background: #0b5ed7; text-decoration: none; }
+	.picker-label { align-self: center; margin-right: 6px; color: #495057; }
+	.unassigned-mark { position: absolute; top: 0; bottom: 0; pointer-events: none;
+		background: repeating-linear-gradient(135deg, rgba(0,0,0,.6) 0 2px, transparent 2px 6px);
+		box-shadow: inset 0 0 0 1px rgba(0,0,0,.7); }
+	.legend span.hatched::before { background: repeating-linear-gradient(135deg, rgba(0,0,0,.6) 0 2px, #fff 2px 6px); box-shadow: inset 0 0 0 1px rgba(0,0,0,.7); }
+	table.under { margin: 8px 0 0; font-size: 14px; line-height: 24px; }
+	table.under td:first-child { min-width: 260px; }
 	tr.head.group th { text-align: center; padding-bottom: 0; }
 	tr.head.group th:not(:first-child) { border-bottom: 1px solid #6c757d; }
 	tr.head.group + tr.head th { padding-top: 2px; }
@@ -228,6 +237,8 @@ function dnplayBookmarklet() {
 
 	let compareMode = 'estimate';
 	let breakdown = 'total';
+	let compareYear = null;
+	const compareSelected = new Set();
 
 	async function compare(testId, years) {
 		showStatus('Loading all years…');
@@ -246,12 +257,13 @@ function dnplayBookmarklet() {
 				const name = d.names[key] || key;
 				let row = byKey[key] || byName[name.toLowerCase()];
 				if (!row) {
-					row = { label: name, names: {}, cells: {} };
+					row = { id: 'row' + rows.length, label: name, names: {}, cells: {}, keys: {} };
 					rows.push(row);
 				}
 				byKey[key] = row;
 				byName[name.toLowerCase()] = row;
 				row.names[d.year] = name;
+				row.keys[d.year] = key;
 				row.cells[d.year] = { painter: d.painter ? d.painter[key] : undefined, estimate: d.estimate[key] };
 				if (!row.color && d.estimate[key]) row.color = regionColor(key, d.estimate);
 				if (key === 'Unassigned') row.color = UNASSIGNED_COLOR;
@@ -284,18 +296,26 @@ function dnplayBookmarklet() {
 			if (compareMode === 'estimate') return c.estimate ? c.estimate.percentage : null;
 			return c.painter === undefined ? null : c.painter;
 		};
-		let rows = matchRegions(all).filter(row => years.some(y => value(row, y) !== null));
+		const allRows = matchRegions(all);
+		let rows = allRows.filter(row => years.some(y => value(row, y) !== null));
 		rows.sort((a, b) => ((value(b, latest) || 0) - (value(a, latest) || 0)) ||
 			years.slice().reverse().reduce((acc, y) => acc || ((value(b, y) || 0) - (value(a, y) || 0)), 0));
+		if (!years.includes(compareYear)) compareYear = latest;
 
 		const table = el('table', { class: 'compare' });
 		const head = el('tr', { class: 'head' });
 		head.appendChild(el('th', null, 'Region'));
-		for (const y of years) head.appendChild(el('th', null, String(y)));
+		for (const y of years) {
+			// clicking a year shows that year's chromosome painter below the table.
+			const th = el('th', { class: 'year-pick' + (y === compareYear ? ' picked' : ''), title: 'Show the ' + y + ' chromosome painter below' }, String(y));
+			th.addEventListener('click', () => { compareYear = y; renderCompare(all); });
+			head.appendChild(th);
+		}
 		table.appendChild(head);
 
 		for (const row of rows) {
-			const tr = el('tr');
+			const tr = el('tr', { class: 'region' });
+			tr.dataset.region = row.id;
 			const name = el('td');
 			const swatch = el('span', { class: 'swatch' });
 			swatch.style.background = row.color || '#adb5bd';
@@ -327,6 +347,65 @@ function dnplayBookmarklet() {
 		body.appendChild(el('p', { class: 'foot' },
 			'Ancestry changes its regions with each update, so some don\'t line up from year to year. Rows are matched by region code, or by name when the code changed. ' +
 			(compareMode === 'estimate' ? 'Hover over a number to see its range.' : 'Chromosome painter numbers include Unassigned, which only appears from 2026.')));
+
+		drawCompareYear(all, allRows, table, latest);
+	}
+
+	// the chromosome painter for the year picked in the compare view. For a past year, the
+	// stretches the latest year leaves Unassigned are striped on top, with a list of what
+	// that year painted there.
+	function drawCompareYear(all, allRows, table, latest) {
+		const picker = el('div', { class: 'tabs' });
+		picker.style.margin = '24px 0 0';
+		picker.appendChild(el('span', { class: 'picker-label' }, 'Chromosome painter for:'));
+		for (const d of all) {
+			const b = el('button', { type: 'button', class: d.year === compareYear ? 'active' : '' }, String(d.year));
+			b.addEventListener('click', () => { compareYear = d.year; renderCompare(all); });
+			picker.appendChild(b);
+		}
+		body.appendChild(picker);
+
+		const d = all.find(x => x.year === compareYear);
+		const latestData = all.find(x => x.year === latest);
+		if (!d || !d.painterData) {
+			body.appendChild(el('p', { class: 'foot' }, 'No chromosome painter data for ' + compareYear + '.'));
+			return;
+		}
+
+		// segments use the table's row ids and colors, so highlighting and colors match the table.
+		const rowFor = {};
+		for (const row of allRows) if (row.keys[d.year]) rowFor[row.keys[d.year]] = row;
+		const showOutline = d.year !== latest && latestData && latestData.painterData && latestData.painter && latestData.painter.Unassigned;
+		const chromosomes = drawChromosomes(d.painterData, d.estimate, d.names, {
+			title: 'Chromosome painter, ' + d.year,
+			regionId: key => rowFor[key] ? rowFor[key].id : key,
+			colorFor: key => key === 'Unassigned' ? UNASSIGNED_COLOR : ((rowFor[key] && rowFor[key].color) || regionColor(key, d.estimate)),
+			outline: showOutline ? latestData.painterData : null,
+			outlineYear: latest,
+		});
+		body.appendChild(chromosomes);
+		// highlighted rows are kept while switching years (row ids stay the same).
+		wireSelection(table, chromosomes, compareSelected);
+
+		if (showOutline) {
+			const under = paintedUnder(latestData.painterData, d.painterData);
+			const box = el('div', { class: 'note' });
+			box.appendChild(el('p', null, 'What ' + d.year + ' painted where ' + latest + ' says Unassigned (the striped parts):'));
+			const list = el('table', { class: 'compare under' });
+			for (const [key, share] of under) {
+				const tr = el('tr');
+				const name = el('td');
+				const swatch = el('span', { class: 'swatch' });
+				swatch.style.background = key ? (key === 'Unassigned' ? UNASSIGNED_COLOR : ((rowFor[key] && rowFor[key].color) || regionColor(key, d.estimate))) : '#dee2e6';
+				name.appendChild(swatch);
+				name.appendChild(document.createTextNode(key ? (d.names[key] || key) : 'Nothing (outside the ' + d.year + ' data)'));
+				tr.appendChild(name);
+				tr.appendChild(el('td', { class: 'num-cell' }, share.toFixed(1) + ' %'));
+				list.appendChild(tr);
+			}
+			box.appendChild(list);
+			chromosomes.insertBefore(box, chromosomes.querySelector('.chromosomes'));
+		}
 	}
 
 	// how Ancestry's own chromosome painter draws each chromosome: its length relative to
@@ -350,9 +429,18 @@ function dnplayBookmarklet() {
 	// draw the chromosome painter: two bars per chromosome (parent 1 on top, parent 2
 	// below), each segment placed by its winPercs (start and end as a fraction of the
 	// chromosome). Anything not covered stays grey, the same as on Ancestry.
-	function drawChromosomes(data, estimate, names) {
+	// opts (all optional):
+	//   title:    heading above the drawing
+	//   regionId: maps a region key to the id its table row uses, for highlighting
+	//   colorFor: maps a region key to its color
+	//   outline:  another year's painter data; its Unassigned stretches are hatched on top
+	//   outlineYear: that year, for the legend
+	function drawChromosomes(data, estimate, names, opts) {
+		opts = opts || {};
+		const regionId = opts.regionId || (key => key);
+		const colorFor = opts.colorFor || (key => regionColor(key, estimate));
 		const section = el('div');
-		section.appendChild(el('h3', null, 'Chromosome painter'));
+		section.appendChild(el('h3', null, opts.title || 'Chromosome painter'));
 		const hint = el('p', { class: 'hint' }, 'Parent 1 on top, Parent 2 below. Click regions in the table to highlight them; click again to remove one. ');
 		hint.appendChild(el('button', { class: 'clear', type: 'button' }, 'Clear'));
 		section.appendChild(hint);
@@ -367,14 +455,23 @@ function dnplayBookmarklet() {
 					const start = Math.max(0, segment.winPercs[0]);
 					const end = Math.min(1, segment.winPercs[1]);
 					const seg = el('div', { class: 'seg' });
-					seg.dataset.region = segment.region;
+					seg.dataset.region = regionId(segment.region);
 					seg.style.left = (100 * start) + '%';
 					seg.style.width = (100 * (end - start)) + '%';
-					seg.style.background = regionColor(segment.region, estimate);
+					seg.style.background = colorFor(segment.region);
 					const name = segment.region === 'Unassigned' ? 'Unassigned' : (names[segment.region] || segment.region);
 					seg.title = name + ' · chromosome ' + c + ', ' + (parent === 'parent1' ? 'parent 1' : 'parent 2') +
 						' · ' + Math.round(100 * start) + '–' + Math.round(100 * end) + '% along';
 					bar.appendChild(seg);
+				}
+				if (opts.outline) {
+					for (const segment of (opts.outline[parent] || {})[c] || []) {
+						if (segment.region !== 'Unassigned') continue;
+						const mark = el('div', { class: 'unassigned-mark' });
+						mark.style.left = (100 * Math.max(0, segment.winPercs[0])) + '%';
+						mark.style.width = (100 * (Math.min(1, segment.winPercs[1]) - Math.max(0, segment.winPercs[0]))) + '%';
+						bar.appendChild(mark);
+					}
 				}
 				const centromere = el('div', { class: 'centromere' });
 				centromere.style.left = CENTROMERE[c - 1] + '%';
@@ -386,8 +483,66 @@ function dnplayBookmarklet() {
 		section.appendChild(grid);
 		const legend = el('div', { class: 'legend' });
 		legend.appendChild(el('span', null, 'Grey: Unassigned, or not covered by the test'));
+		if (opts.outline) legend.appendChild(el('span', { class: 'hatched' }, 'Striped: Unassigned in ' + opts.outlineYear));
 		section.appendChild(legend);
 		return section;
+	}
+
+	// clicking table rows (tr.region) highlights the matching segments (same data-region).
+	// Each click adds or removes one, so several can be shown at once; Clear removes all.
+	// Returns a function that reapplies the highlight after the table is redrawn.
+	function wireSelection(table, chromosomes, selected) {
+		selected = selected || new Set();
+		const clearBtn = chromosomes.querySelector('.clear');
+		function refresh() {
+			for (const tr of table.querySelectorAll('tr.region')) tr.classList.toggle('selected', selected.has(tr.dataset.region));
+			chromosomes.classList.toggle('dim', selected.size > 0);
+			for (const seg of chromosomes.querySelectorAll('.seg')) seg.classList.toggle('on', selected.has(seg.dataset.region));
+			clearBtn.style.visibility = selected.size ? 'visible' : 'hidden';
+		}
+		table.addEventListener('click', e => {
+			const row = e.target.closest('tr.region');
+			if (!row) return;
+			const key = row.dataset.region;
+			if (selected.has(key)) selected.delete(key); else selected.add(key);
+			refresh();
+		});
+		clearBtn.addEventListener('click', () => {
+			selected.clear();
+			refresh();
+		});
+		refresh();
+		return refresh;
+	}
+
+	// what one year painted onto the stretches another year leaves Unassigned. Segment
+	// positions are fractions of each chromosome, so overlaps are weighted by chromosome
+	// length to make them comparable. Returns [regionKey, percent of that Unassigned DNA].
+	function paintedUnder(unassignedData, otherData) {
+		const totals = {};
+		let all = 0;
+		for (const parent of ['parent1', 'parent2']) {
+			for (let c = 1; c <= 22; c++) {
+				const weight = CHROMOSOME_LENGTH[c - 1];
+				const others = ((otherData[parent] || {})[c]) || [];
+				for (const u of ((unassignedData[parent] || {})[c]) || []) {
+					if (u.region !== 'Unassigned') continue;
+					const [us, ue] = u.winPercs;
+					let covered = 0;
+					for (const s of others) {
+						const overlap = Math.min(ue, s.winPercs[1]) - Math.max(us, s.winPercs[0]);
+						if (overlap <= 0) continue;
+						totals[s.region] = (totals[s.region] || 0) + overlap * weight;
+						covered += overlap;
+					}
+					const gap = (ue - us) - covered;
+					if (gap > 1e-9) totals[''] = (totals[''] || 0) + gap * weight;
+					all += (ue - us) * weight;
+				}
+			}
+		}
+		if (!all) return [];
+		return Object.keys(totals).map(k => [k, 100 * totals[k] / all]).sort((a, b) => b[1] - a[1]);
 	}
 
 	function render(year, painter, estimate, names, keys, painterData) {
@@ -554,27 +709,7 @@ function dnplayBookmarklet() {
 			const chromosomes = drawChromosomes(painterData, estimate, names);
 			body.appendChild(chromosomes);
 
-			// clicking region rows highlights their segments. Each click adds or removes one
-			// region, so several can be compared at once; Clear removes them all.
-			const selected = new Set();
-			const clearBtn = chromosomes.querySelector('.clear');
-			refreshSelection = function () {
-				for (const tr of table.querySelectorAll('tr.region')) tr.classList.toggle('selected', selected.has(tr.dataset.region));
-				chromosomes.classList.toggle('dim', selected.size > 0);
-				for (const seg of chromosomes.querySelectorAll('.seg')) seg.classList.toggle('on', selected.has(seg.dataset.region));
-				clearBtn.style.visibility = selected.size ? 'visible' : 'hidden';
-			};
-			table.addEventListener('click', e => {
-				const row = e.target.closest('tr.region');
-				if (!row) return;
-				const key = row.dataset.region;
-				if (selected.has(key)) selected.delete(key); else selected.add(key);
-				refreshSelection();
-			});
-			clearBtn.addEventListener('click', () => {
-				selected.clear();
-				refreshSelection();
-			});
+			refreshSelection = wireSelection(table, chromosomes);
 		}
 
 		buildTable();
