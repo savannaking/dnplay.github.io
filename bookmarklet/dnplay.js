@@ -70,6 +70,9 @@ function dnplayBookmarklet() {
 	table.compare { font-size: 15px; line-height: 26px; }
 	.compare td, .compare th { padding: 0 10px; }
 	.compare th { padding-top: 6px; padding-bottom: 6px; }
+	tr.head.group th { text-align: center; padding-bottom: 0; }
+	tr.head.group th:not(:first-child) { border-bottom: 1px solid #6c757d; }
+	tr.head.group + tr.head th { padding-top: 2px; }
 	.compare td:first-child { min-width: 190px; }
 	.compare td.num-cell { text-align: right; }
 	.compare td.missing { color: #adb5bd; font-weight: 400; }
@@ -224,6 +227,7 @@ function dnplayBookmarklet() {
 	// ---------- compare years ----------
 
 	let compareMode = 'estimate';
+	let breakdown = 'total';
 
 	async function compare(testId, years) {
 		showStatus('Loading all years…');
@@ -417,43 +421,134 @@ function dnplayBookmarklet() {
 			((value(painter, b) || 0) - (value(painter, a) || 0)) ||
 			(((estimate[b] || {}).percentage || 0) - ((estimate[a] || {}).percentage || 0)));
 
-		const table = el('table');
-		const head = el('tr', { class: 'head' });
-		['Region', 'Chromosome painter', 'Estimate', 'Range'].forEach(h => head.appendChild(el('th', null, h)));
-		table.appendChild(head);
-
-		let lowConfidence = false;
-		for (const key of rows) {
-			const r = estimate[key];
-			const tr = el('tr', { class: 'region' });
-			tr.dataset.region = key;
-			const name = el('td');
-			// darkColor is the color Ancestry's chromosome painter uses for the region.
-			const swatch = el('span', { class: 'swatch' });
-			swatch.style.background = regionColor(key, estimate);
-			name.appendChild(swatch);
-			name.appendChild(document.createTextNode(key === 'Unassigned' ? 'Unassigned' : (names[key] || key)));
-			tr.appendChild(name);
-			const p = value(painter, key);
-			tr.appendChild(el('td', null, p === null ? '–' : p.toFixed(2) + ' %'));
-			tr.appendChild(el('td', null, r ? r.percentage + ' %' : '–'));
-			let range = r ? r.lowerConfidence + '–' + r.upperConfidence + ' %' : '–';
-			if (r && r.lowConfidenceAssignment) {
-				range += ' *';
-				lowConfidence = true;
+		// the chromosome painter split by parent, as a share of all your DNA, so each
+		// parent's column adds up to about 50% (the same way Ancestry's parent numbers do).
+		const painterByParent = { parent1: {}, parent2: {} };
+		if (painterData) {
+			let total = 0;
+			for (const parent of ['parent1', 'parent2']) {
+				for (const chromosome in (painterData[parent] || {})) {
+					for (const segment of painterData[parent][chromosome]) {
+						const length = segment.windows[1] - segment.windows[0] + 1;
+						painterByParent[parent][segment.region] = (painterByParent[parent][segment.region] || 0) + length;
+						total += length;
+					}
+				}
 			}
-			tr.appendChild(el('td', null, range));
-			table.appendChild(tr);
+			for (const parent in painterByParent) {
+				for (const key in painterByParent[parent]) painterByParent[parent][key] = 100 * painterByParent[parent][key] / total;
+			}
 		}
+
+		// Ancestry's estimate uses -1 for "none of this region came from that parent", and
+		// leaves a grandparent field out when it has no number for it.
+		const estimateField = (r, field) => (!r || r[field] === undefined) ? null : (r[field] < 0 ? 0 : r[field]);
+		const pct = v => v === null ? '–' : v + ' %';
+		const pct2 = v => v === null ? '–' : v.toFixed(2) + ' %';
+		const painterParent = (parent, key) => painterData ? (painterByParent[parent][key] || 0) : null;
+
+		const BREAKDOWNS = {
+			total: {
+				label: 'Total',
+				headers: ['Region', 'Chromosome painter', 'Estimate', 'Range'],
+				cells: key => {
+					const r = estimate[key];
+					let range = r ? r.lowerConfidence + '–' + r.upperConfidence + ' %' : '–';
+					if (r && r.lowConfidenceAssignment) range += ' *';
+					return [pct2(value(painter, key)), r ? pct(r.percentage) : '–', range];
+				},
+			},
+			parent: {
+				label: 'By parent',
+				groups: [['', 1], ['Parent 1', 2], ['Parent 2', 2]],
+				headers: ['Region', 'Painter', 'Estimate', 'Painter', 'Estimate'],
+				cells: key => [
+					pct2(painterParent('parent1', key)), pct(estimateField(estimate[key], 'parent1')),
+					pct2(painterParent('parent2', key)), pct(estimateField(estimate[key], 'parent2')),
+				],
+			},
+			grandparent: {
+				label: 'By grandparent',
+				groups: [['', 1], ['Parent 1\'s side', 2], ['Parent 2\'s side', 2]],
+				headers: ['Region', 'Grandparent 1', 'Grandparent 2', 'Grandparent 1', 'Grandparent 2'],
+				cells: key => ['parent1Parent1', 'parent1Parent2', 'parent2Parent1', 'parent2Parent2']
+					.map(f => key === 'Unassigned' ? '–' : pct(estimateField(estimate[key], f))),
+			},
+		};
+		const BREAKDOWN_NOTES = {
+			total: '',
+			parent: 'Each parent\'s numbers are a share of all your DNA, so each parent adds up to about 50%. The painter columns include Unassigned DNA; the estimate columns don\'t.',
+			grandparent: 'From your estimate only; the chromosome painter has no grandparent split. These are shares of all your DNA, but Ancestry doesn\'t assign all of each parent\'s DNA to a grandparent, so they add up to less than the parent numbers. "–" means Ancestry gave no number.',
+		};
+
+		const switcher = el('div', { class: 'tabs' });
+		switcher.style.margin = '0 0 12px';
+		body.appendChild(switcher);
+		const breakdownNote = el('p', { class: 'hint' });
+		body.appendChild(breakdownNote);
+
+		const table = el('table');
 		const wrap = el('div', { class: 'wrap' });
 		wrap.appendChild(table);
 		body.appendChild(wrap);
+		const footArea = el('div');
+		body.appendChild(footArea);
 
-		const foot = [];
-		if (lowConfidence) foot.push('* Ancestry marks this region as a low-confidence assignment.');
-		if (!hasPainter) foot.push('No chromosome painter data for ' + year + '.');
-		if (!hasEstimate) foot.push('No ethnicity estimate for ' + year + '.');
-		for (const text of foot) body.appendChild(el('p', { class: 'foot' }, text));
+		let refreshSelection = () => {};
+
+		function buildTable() {
+			const mode = BREAKDOWNS[breakdown] ? breakdown : 'total';
+			table.innerHTML = '';
+			table.className = mode === 'total' ? '' : 'compare';
+			// an optional first header row groups columns, e.g. "Parent 1" over its two columns.
+			if (BREAKDOWNS[mode].groups) {
+				const groupRow = el('tr', { class: 'head group' });
+				for (const [text, span] of BREAKDOWNS[mode].groups) groupRow.appendChild(el('th', { colspan: span }, text));
+				table.appendChild(groupRow);
+			}
+			const head = el('tr', { class: 'head' });
+			BREAKDOWNS[mode].headers.forEach(h => head.appendChild(el('th', null, h)));
+			table.appendChild(head);
+
+			let lowConfidence = false;
+			for (const key of rows) {
+				const r = estimate[key];
+				const tr = el('tr', { class: 'region' });
+				tr.dataset.region = key;
+				const name = el('td');
+				// darkColor is the color Ancestry's chromosome painter uses for the region.
+				const swatch = el('span', { class: 'swatch' });
+				swatch.style.background = regionColor(key, estimate);
+				name.appendChild(swatch);
+				name.appendChild(document.createTextNode(key === 'Unassigned' ? 'Unassigned' : (names[key] || key)));
+				tr.appendChild(name);
+				for (const text of BREAKDOWNS[mode].cells(key)) {
+					tr.appendChild(el('td', { class: mode === 'total' ? '' : (text === '–' ? 'num-cell missing' : 'num-cell') }, text));
+				}
+				if (mode === 'total' && r && r.lowConfidenceAssignment) lowConfidence = true;
+				table.appendChild(tr);
+			}
+
+			for (const b of switcher.children) b.classList.toggle('active', b.dataset.mode === mode);
+			breakdownNote.textContent = BREAKDOWN_NOTES[mode];
+			breakdownNote.style.display = BREAKDOWN_NOTES[mode] ? 'block' : 'none';
+
+			footArea.innerHTML = '';
+			const foot = [];
+			if (lowConfidence) foot.push('* Ancestry marks this region as a low-confidence assignment.');
+			if (!hasPainter) foot.push('No chromosome painter data for ' + year + '.');
+			if (!hasEstimate) foot.push('No ethnicity estimate for ' + year + '.');
+			for (const text of foot) footArea.appendChild(el('p', { class: 'foot' }, text));
+
+			refreshSelection();
+		}
+
+		for (const mode in BREAKDOWNS) {
+			const b = el('button', { type: 'button' }, BREAKDOWNS[mode].label);
+			b.dataset.mode = mode;
+			b.addEventListener('click', () => { breakdown = mode; buildTable(); });
+			switcher.appendChild(b);
+		}
 
 		if (painterData) {
 			const chromosomes = drawChromosomes(painterData, estimate, names);
@@ -463,25 +558,26 @@ function dnplayBookmarklet() {
 			// region, so several can be compared at once; Clear removes them all.
 			const selected = new Set();
 			const clearBtn = chromosomes.querySelector('.clear');
-			function updateSelection() {
+			refreshSelection = function () {
 				for (const tr of table.querySelectorAll('tr.region')) tr.classList.toggle('selected', selected.has(tr.dataset.region));
 				chromosomes.classList.toggle('dim', selected.size > 0);
 				for (const seg of chromosomes.querySelectorAll('.seg')) seg.classList.toggle('on', selected.has(seg.dataset.region));
 				clearBtn.style.visibility = selected.size ? 'visible' : 'hidden';
-			}
+			};
 			table.addEventListener('click', e => {
 				const row = e.target.closest('tr.region');
 				if (!row) return;
 				const key = row.dataset.region;
 				if (selected.has(key)) selected.delete(key); else selected.add(key);
-				updateSelection();
+				refreshSelection();
 			});
 			clearBtn.addEventListener('click', () => {
 				selected.clear();
-				updateSelection();
+				refreshSelection();
 			});
-			updateSelection();
 		}
+
+		buildTable();
 	}
 
 	// ---------- start ----------
