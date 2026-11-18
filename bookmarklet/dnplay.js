@@ -63,6 +63,17 @@ function dnplayBookmarklet() {
 	tr.region.selected td { box-shadow: inset 0 0 0 9999px rgba(255,255,255,.18); }
 	h3 { font-size: 18px; margin: 28px 0 4px; }
 	.hint { color: #6c757d; font-size: 13px; margin: 0 0 12px; }
+	.hint .clear { font-size: 12px; padding: 1px 8px; margin-left: 4px; }
+	.tabs { display: flex; gap: 4px; }
+	.tabs button { border-color: #ced4da; color: #495057; }
+	.tabs button.active { background: #212529; border-color: #212529; color: #fff; }
+	table.compare { font-size: 15px; line-height: 26px; }
+	.compare td, .compare th { padding: 0 10px; }
+	.compare th { padding-top: 6px; padding-bottom: 6px; }
+	.compare td:first-child { min-width: 190px; }
+	.compare td.num-cell { text-align: right; }
+	.compare td.missing { color: #adb5bd; font-weight: 400; }
+	.compare .changed { font-size: 12px; font-weight: 400; color: #ced4da; display: block; line-height: 14px; padding-bottom: 6px; }
 	.chromosomes { display: grid; grid-template-columns: 28px 1fr; row-gap: 10px; column-gap: 8px; align-items: center; }
 	.num { text-align: right; font-weight: 700; font-size: 13px; color: #495057; }
 	.pair { display: flex; flex-direction: column; gap: 3px; }
@@ -78,7 +89,11 @@ function dnplayBookmarklet() {
 	<div class="panel" role="dialog" aria-label="DNPlay results">
 		<div class="top">
 			<h2>DNPlay results</h2>
-			<label>Year <select class="year"></select></label>
+			<div class="tabs">
+				<button type="button" class="tab-results active">Results</button>
+				<button type="button" class="tab-compare">Compare years</button>
+			</div>
+			<label class="year-label">Year <select class="year"></select></label>
 			<button class="close" title="Close" aria-label="Close">&times;</button>
 		</div>
 		<div class="body"><p class="status">Loading…</p></div>
@@ -156,8 +171,18 @@ function dnplayBookmarklet() {
 		return { percents: percents, data: data };
 	}
 
-	async function load(testId, year) {
-		showStatus('Loading ' + year + '…');
+	// everything for one year: painter percentages and segments, the estimate, and names.
+	// Each year is fetched once and reused by both views.
+	const yearCache = {};
+	function fetchYear(testId, year) {
+		if (!yearCache[year]) {
+			yearCache[year] = fetchYearUncached(testId, year);
+			yearCache[year].catch(() => { delete yearCache[year]; });
+		}
+		return yearCache[year];
+	}
+
+	async function fetchYearUncached(testId, year) {
 		const enc = encodeURIComponent(testId);
 		const [painterJson, estimateJson] = await Promise.all([
 			getJson('/dna/origins/inheritance/api/v1/ethnicities/' + enc + '/chromosomes?version=' + year),
@@ -168,24 +193,136 @@ function dnplayBookmarklet() {
 		const painter = painterSummary ? painterSummary.percents : null;
 		const estimate = {};
 		for (const r of (estimateJson && estimateJson.regions) || []) estimate[r.key] = r;
-
 		const keys = new Set([...Object.keys(painter || {}), ...Object.keys(estimate)]);
-		if (!keys.size) {
-			showStatus('No ethnicity results found for ' + year + '.', true);
-			return;
-		}
 
 		// names straight from Ancestry for that year, so new regions are always named.
 		let names = {};
-		try {
-			names = (await getJson('/dna/origins/public/ethnicity/' + year + '/names?locale=en-US', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify([...keys].filter(k => k !== 'Unassigned')),
-			})) || {};
-		} catch (e) { /* fall back to showing the key */ }
+		if (keys.size) {
+			try {
+				names = (await getJson('/dna/origins/public/ethnicity/' + year + '/names?locale=en-US', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify([...keys].filter(k => k !== 'Unassigned')),
+				})) || {};
+			} catch (e) { /* fall back to showing the key */ }
+		}
+		names.Unassigned = 'Unassigned';
 
-		render(year, painter, estimate, names, keys, painterSummary ? painterSummary.data : null);
+		return { year: Number(year), painter, painterData: painterSummary ? painterSummary.data : null, estimate, names, keys };
+	}
+
+	async function load(testId, year) {
+		showStatus('Loading ' + year + '…');
+		const d = await fetchYear(testId, year);
+		if (!d.keys.size) {
+			showStatus('No ethnicity results found for ' + year + '.', true);
+			return;
+		}
+		render(year, d.painter, d.estimate, d.names, d.keys, d.painterData);
+	}
+
+	// ---------- compare years ----------
+
+	let compareMode = 'estimate';
+
+	async function compare(testId, years) {
+		showStatus('Loading all years…');
+		const all = (await Promise.all(years.map(y => fetchYear(testId, y)))).filter(d => d.keys.size);
+		all.sort((a, b) => a.year - b.year);
+		renderCompare(all);
+	}
+
+	// line up regions across years. Region codes mostly stay the same between updates, but
+	// names can change (and 2022 used different codes), so match by code first, then by name.
+	function matchRegions(all) {
+		const rows = [];
+		const byKey = {}, byName = {};
+		for (const d of all.slice().reverse()) {   // newest first, so rows are named the current way
+			for (const key of d.keys) {
+				const name = d.names[key] || key;
+				let row = byKey[key] || byName[name.toLowerCase()];
+				if (!row) {
+					row = { label: name, names: {}, cells: {} };
+					rows.push(row);
+				}
+				byKey[key] = row;
+				byName[name.toLowerCase()] = row;
+				row.names[d.year] = name;
+				row.cells[d.year] = { painter: d.painter ? d.painter[key] : undefined, estimate: d.estimate[key] };
+				if (!row.color && d.estimate[key]) row.color = regionColor(key, d.estimate);
+				if (key === 'Unassigned') row.color = UNASSIGNED_COLOR;
+			}
+		}
+		return rows;
+	}
+
+	function renderCompare(all) {
+		body.innerHTML = '';
+		if (!all.length) {
+			showStatus('No ethnicity results found.', true);
+			return;
+		}
+		const years = all.map(d => d.year);
+		const latest = years[years.length - 1];
+
+		const modes = el('div', { class: 'tabs' });
+		modes.style.margin = '16px 0';
+		for (const [mode, label] of [['estimate', 'Estimate'], ['painter', 'Chromosome painter']]) {
+			const b = el('button', { type: 'button', class: mode === compareMode ? 'active' : '' }, label);
+			b.addEventListener('click', () => { compareMode = mode; renderCompare(all); });
+			modes.appendChild(b);
+		}
+		body.appendChild(modes);
+
+		const value = (row, y) => {
+			const c = row.cells[y];
+			if (!c) return null;
+			if (compareMode === 'estimate') return c.estimate ? c.estimate.percentage : null;
+			return c.painter === undefined ? null : c.painter;
+		};
+		let rows = matchRegions(all).filter(row => years.some(y => value(row, y) !== null));
+		rows.sort((a, b) => ((value(b, latest) || 0) - (value(a, latest) || 0)) ||
+			years.slice().reverse().reduce((acc, y) => acc || ((value(b, y) || 0) - (value(a, y) || 0)), 0));
+
+		const table = el('table', { class: 'compare' });
+		const head = el('tr', { class: 'head' });
+		head.appendChild(el('th', null, 'Region'));
+		for (const y of years) head.appendChild(el('th', null, String(y)));
+		table.appendChild(head);
+
+		for (const row of rows) {
+			const tr = el('tr');
+			const name = el('td');
+			const swatch = el('span', { class: 'swatch' });
+			swatch.style.background = row.color || '#adb5bd';
+			name.appendChild(swatch);
+			name.appendChild(document.createTextNode(row.label));
+			// note older names, e.g. "Southeastern England & Northwestern Europe" in 2025.
+			const older = {};
+			for (const y of years) {
+				const n = row.names[y];
+				if (n && n !== row.label) (older[n] = older[n] || []).push(y);
+			}
+			const was = Object.keys(older).map(n => n + ' (' + older[n].join(', ') + ')');
+			if (was.length) name.appendChild(el('span', { class: 'changed' }, 'was ' + was.join('; ')));
+			tr.appendChild(name);
+			for (const y of years) {
+				const v = value(row, y);
+				const c = row.cells[y];
+				const td = el('td', { class: v === null ? 'num-cell missing' : 'num-cell' },
+					v === null ? '–' : (compareMode === 'estimate' ? v + ' %' : v.toFixed(2) + ' %'));
+				if (compareMode === 'estimate' && c && c.estimate) td.title = 'Range ' + c.estimate.lowerConfidence + '–' + c.estimate.upperConfidence + ' %';
+				tr.appendChild(td);
+			}
+			table.appendChild(tr);
+		}
+		const wrap = el('div', { class: 'wrap' });
+		wrap.appendChild(table);
+		body.appendChild(wrap);
+
+		body.appendChild(el('p', { class: 'foot' },
+			'Ancestry changes its regions with each update, so some don\'t line up from year to year. Rows are matched by region code, or by name when the code changed. ' +
+			(compareMode === 'estimate' ? 'Hover over a number to see its range.' : 'Chromosome painter numbers include Unassigned, which only appears from 2026.')));
 	}
 
 	// how Ancestry's own chromosome painter draws each chromosome: its length relative to
@@ -212,7 +349,9 @@ function dnplayBookmarklet() {
 	function drawChromosomes(data, estimate, names) {
 		const section = el('div');
 		section.appendChild(el('h3', null, 'Chromosome painter'));
-		section.appendChild(el('p', { class: 'hint' }, 'Parent 1 on top, Parent 2 below. Click a region in the table to highlight it.'));
+		const hint = el('p', { class: 'hint' }, 'Parent 1 on top, Parent 2 below. Click regions in the table to highlight them; click again to remove one. ');
+		hint.appendChild(el('button', { class: 'clear', type: 'button' }, 'Clear'));
+		section.appendChild(hint);
 		const grid = el('div', { class: 'chromosomes' });
 		for (let c = 1; c <= 22; c++) {
 			grid.appendChild(el('div', { class: 'num' }, String(c)));
@@ -320,16 +459,28 @@ function dnplayBookmarklet() {
 			const chromosomes = drawChromosomes(painterData, estimate, names);
 			body.appendChild(chromosomes);
 
-			// clicking a region row highlights its segments; clicking it again clears that.
-			let selected = null;
+			// clicking region rows highlights their segments. Each click adds or removes one
+			// region, so several can be compared at once; Clear removes them all.
+			const selected = new Set();
+			const clearBtn = chromosomes.querySelector('.clear');
+			function updateSelection() {
+				for (const tr of table.querySelectorAll('tr.region')) tr.classList.toggle('selected', selected.has(tr.dataset.region));
+				chromosomes.classList.toggle('dim', selected.size > 0);
+				for (const seg of chromosomes.querySelectorAll('.seg')) seg.classList.toggle('on', selected.has(seg.dataset.region));
+				clearBtn.style.visibility = selected.size ? 'visible' : 'hidden';
+			}
 			table.addEventListener('click', e => {
 				const row = e.target.closest('tr.region');
 				if (!row) return;
-				selected = selected === row.dataset.region ? null : row.dataset.region;
-				for (const tr of table.querySelectorAll('tr.region')) tr.classList.toggle('selected', tr.dataset.region === selected);
-				chromosomes.classList.toggle('dim', selected !== null);
-				for (const seg of chromosomes.querySelectorAll('.seg')) seg.classList.toggle('on', seg.dataset.region === selected);
+				const key = row.dataset.region;
+				if (selected.has(key)) selected.delete(key); else selected.add(key);
+				updateSelection();
 			});
+			clearBtn.addEventListener('click', () => {
+				selected.clear();
+				updateSelection();
+			});
+			updateSelection();
 		}
 	}
 
@@ -346,6 +497,24 @@ function dnplayBookmarklet() {
 			const years = versions.length ? versions.slice().sort((a, b) => b - a) : [new Date().getFullYear()];
 			for (const y of years) yearSelect.appendChild(el('option', { value: y }, String(y)));
 			yearSelect.addEventListener('change', () => load(testId, yearSelect.value).catch(fail));
+
+			const tabResults = root.querySelector('.tab-results');
+			const tabCompare = root.querySelector('.tab-compare');
+			const yearLabel = root.querySelector('.year-label');
+			tabResults.addEventListener('click', () => {
+				tabResults.classList.add('active');
+				tabCompare.classList.remove('active');
+				yearLabel.style.visibility = 'visible';
+				load(testId, yearSelect.value).catch(fail);
+			});
+			tabCompare.addEventListener('click', () => {
+				tabCompare.classList.add('active');
+				tabResults.classList.remove('active');
+				yearLabel.style.visibility = 'hidden';
+				compare(testId, years).catch(fail);
+			});
+			if (years.length < 2) tabCompare.style.display = 'none';
+
 			await load(testId, years[0]);
 		} catch (e) {
 			fail(e);
