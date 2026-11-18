@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>DNPlay - AncestryDNA Bookmarklet</title>
+	<meta name="description" content="DNPlay">
+	<meta name="author" content="DNPlay">
+
+	<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.1/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-4bw+/aepP/YC94hEpVNVgiZdgIC5+VKNBQNGCHeKRQN+PtmoHDEXuppvnDJzQIu9" crossorigin="anonymous">
+	<style>
+		.alert.alert-info p:last-child {
+			margin-bottom: 0;
+		}
+
+		#bookmarkletLink {
+			font-size: 20px;
+			cursor: grab;
+		}
+
+		#bookmarkletCode {
+			font-family: monospace;
+			font-size: 12px;
+			resize: none;
+		}
+	</style>
+</head>
+<body>
+  <div class="container mt-3">
+    <h2 class="text-center">AncestryDNA Bookmarklet</h2>
+    <div class="row justify-content-center mt-4">
+      <div class="col-md-7">
+        <div class="alert alert-info">
+          <p>A one-click version of the <a href="ancestrydna.html">AncestryDNA Result Displayer</a>. No codes to copy and nothing to paste.</p>
+          <p>Click it on any ancestry.com page while you're signed in. It loads your chromosome painter percentages (with decimals), your ethnicity estimate and its ranges, and shows them in a panel on top of the page. Your data only goes between your browser and Ancestry.</p>
+        </div>
+        <div class="alert alert-info text-center">
+          <p class="mb-2"><strong>Step 1:</strong> Drag this button to your bookmarks bar:</p>
+          <a id="bookmarkletLink" class="btn btn-success mb-2" href="#" onclick="alert('Drag this button to your bookmarks bar instead of clicking it. Then click the bookmark while on ancestry.com.'); return false;">DNPlay</a>
+          <p style="color: gray">Bookmarks bar hidden? Press Ctrl+Shift+B (Cmd+Shift+B on a Mac).</p>
+        </div>
+        <div class="alert alert-info text-center">
+          <p class="mb-2"><strong>Step 2:</strong> Go to <a href="https://www.ancestry.com/dna/insights/" target="_blank">ancestry.com</a>, sign in, and click the <strong>DNPlay</strong> bookmark.</p>
+          <p style="color: gray">Click it again or press Esc to close the panel. To see someone else's results that you manage, open one of their DNA pages first.</p>
+        </div>
+        <div class="alert alert-secondary">
+          <p class="mb-2"><strong>Can't drag it?</strong> (for example on a phone) Make a bookmark of any page, then edit it and replace its address with this code:</p>
+          <textarea id="bookmarkletCode" class="form-control mb-2" rows="4" readonly></textarea>
+          <button id="copyBtn" class="btn btn-secondary btn-sm">Copy code</button>
+          <span id="copied" class="ms-2" style="display: none;">Copied</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="bookmarklet/dnplay.js"></script>
+  <script>
+	// turn the function into a bookmark address. Drop indentation and comment-only lines
+	// to keep it short, then encode it so characters like % and # in the code aren't
+	// mangled when the browser runs the bookmark.
+	const source = dnplayBookmarklet.toString()
+		.replace(/^[ \t]+/gm, '')
+		.replace(/^\/\/.*\n/gm, '');
+	const code = 'javascript:' + encodeURIComponent('(' + source + ')();');
+	document.getElementById('bookmarkletLink').href = code;
+	document.getElementById('bookmarkletCode').value = code;
+
+	document.getElementById('copyBtn').addEventListener('click', async () => {
+		const box = document.getElementById('bookmarkletCode');
+		try {
+			await navigator.clipboard.writeText(box.value);
+		} catch {
+			box.select();
+			document.execCommand('copy');
+		}
+		document.getElementById('copied').style.display = 'inline';
+	});
+  </script>
+</body>
+</html>
